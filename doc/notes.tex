@@ -7,6 +7,7 @@
 \usepackage{hyperref}
 \usepackage{titling}
 \usepackage{amsmath}
+\usepackage{verbatim}
 
 \setlength{\droptitle}{-4em}
 
@@ -34,9 +35,9 @@
 The project developed for the Code Transformation and Optimization course is a
 set of LLVM intraprocedural passes aimed at converting C functions from a
 floating point to a fixed point representation.
-The target fixed-poin representation is two's complement 64-bit fixed point,
-and the number of bits for the integer and decimal part is chosen by the
-algorithm and may be different for each function of the same compilation unit.
+The target fixed-point representation is a 64-bit two's complement one; the
+number of bits for the integer and decimal part is chosen by the algorithm, and
+may be different for each function of the same compilation unit.
 The passes do not modify the return type of the function (the return value is
 converted back to floating point).
 Figure \ref{fig:project} reports the overall schema of the project.
@@ -256,7 +257,6 @@ Download LLVM 3.4 and clang:
          -float-range-analysis -precision-analysis -float2fix
          -dce -precision-bitwidth $PREC -S < in.bc > out.ll
 \end{verbatim}
-
 
 \nocite{*}
 \bibliographystyle{plain}
