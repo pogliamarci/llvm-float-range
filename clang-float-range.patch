@@ -1,0 +1,172 @@
+diff -Naur clang-3.4/include/clang/Basic/Attr.td llvm-float-range/tools/clang/include/clang/Basic/Attr.td
+--- clang-3.4/include/clang/Basic/Attr.td	2013-12-01 03:46:47.000000000 +0000
++++ llvm-float-range/tools/clang/include/clang/Basic/Attr.td	2015-01-05 23:58:53.000000000 +0000
+@@ -1101,3 +1101,10 @@
+ def Unaligned : IgnoredAttr {
+   let Spellings = [Keyword<"__unaligned">];
+ }
++
++// Specify fp ranges
++def FPRange : Attr {
++  let Spellings = [GNU<"float_range">];
++  let Args = [IntArgument<"from">, IntArgument<"to">];
++  let Subjects = [Var];
++}
+diff -Naur clang-3.4/lib/CodeGen/CGDecl.cpp llvm-float-range/tools/clang/lib/CodeGen/CGDecl.cpp
+--- clang-3.4/lib/CodeGen/CGDecl.cpp	2013-10-30 21:53:58.000000000 +0000
++++ llvm-float-range/tools/clang/lib/CodeGen/CGDecl.cpp	2015-01-06 00:00:29.000000000 +0000
+@@ -718,7 +718,7 @@
+     }
+     return true;
+   }
+-  
++
+   if (llvm::ConstantDataSequential *CDS =
+         dyn_cast<llvm::ConstantDataSequential>(Init)) {
+     for (unsigned i = 0, e = CDS->getNumElements(); i != e; ++i) {
+@@ -747,8 +747,8 @@
+     Builder.CreateStore(Init, Loc, isVolatile);
+     return;
+   }
+-  
+-  if (llvm::ConstantDataSequential *CDS = 
++
++  if (llvm::ConstantDataSequential *CDS =
+         dyn_cast<llvm::ConstantDataSequential>(Init)) {
+     for (unsigned i = 0, e = CDS->getNumElements(); i != e; ++i) {
+       llvm::Constant *Elt = CDS->getElementAsConstant(i);
+@@ -1739,4 +1739,8 @@
+ 
+   if (D.hasAttr<AnnotateAttr>())
+       EmitVarAnnotations(&D, DeclPtr);
++
++  if (D.hasAttr<FPRangeAttr>())
++      EmitVarFPRange(&D, Arg);
++
+ }
+diff -Naur clang-3.4/lib/CodeGen/CodeGenFunction.cpp llvm-float-range/tools/clang/lib/CodeGen/CodeGenFunction.cpp
+--- clang-3.4/lib/CodeGen/CodeGenFunction.cpp	2013-11-05 09:12:18.000000000 +0000
++++ llvm-float-range/tools/clang/lib/CodeGen/CodeGenFunction.cpp	2015-01-05 11:58:48.000000000 +0000
+@@ -399,7 +399,7 @@
+       if (ty.isVolatileQualified())
+         typeQuals += typeQuals.empty() ? "volatile" : " volatile";
+     }
+-    
++
+     argTypeQuals.push_back(llvm::MDString::get(Context, typeQuals));
+ 
+     // Get image access qualifier:
+@@ -1494,4 +1494,22 @@
+   return V;
+ }
+ 
++void CodeGenFunction::EmitVarFPRange(const VarDecl *D, llvm::Value *V) {
++    assert(D->hasAttr<FPRangeAttr>() && "no FPRange attribute");
++
++    if(V->getType()->isFloatTy() || V->getType()->isDoubleTy()) {
++       llvm::IntegerType* t = llvm::IntegerType::get(V->getContext(), 64);
++       llvm::Value* F = llvm::Intrinsic::getDeclaration(&(CGM.getModule()),
++                                                   llvm::Intrinsic::float_range,
++                                                   V->getType());
++        llvm::Value *Args[3] = {
++            V,
++            llvm::ConstantInt::get(t, D->getAttr<FPRangeAttr>()->getFrom() ),
++            llvm::ConstantInt::get(t, D->getAttr<FPRangeAttr>()->getTo() )
++         };
++
++        llvm::Value* Val = Builder.CreateCall(F, Args);
++    }
++}
++
+ CodeGenFunction::CGCapturedStmtInfo::~CGCapturedStmtInfo() { }
+diff -Naur clang-3.4/lib/CodeGen/CodeGenFunction.h llvm-float-range/tools/clang/lib/CodeGen/CodeGenFunction.h
+--- clang-3.4/lib/CodeGen/CodeGenFunction.h	2013-11-15 17:24:45.000000000 +0000
++++ llvm-float-range/tools/clang/lib/CodeGen/CodeGenFunction.h	2015-01-05 11:58:48.000000000 +0000
+@@ -2386,6 +2386,14 @@
+   /// annotation result.
+   llvm::Value *EmitFieldAnnotations(const FieldDecl *D, llvm::Value *V);
+ 
++
++  //===--------------------------------------------------------------------===//
++  //                          FPRange metadata emission
++  //===--------------------------------------------------------------------===//
++
++  /// Emit FPRange metadata for the local variable V, declared by D.
++  void EmitVarFPRange(const VarDecl *D, llvm::Value *V);
++
+   //===--------------------------------------------------------------------===//
+   //                             Internal Helpers
+   //===--------------------------------------------------------------------===//
+diff -Naur clang-3.4/lib/Sema/SemaDeclAttr.cpp llvm-float-range/tools/clang/lib/Sema/SemaDeclAttr.cpp
+--- clang-3.4/lib/Sema/SemaDeclAttr.cpp	2013-11-19 18:43:09.000000000 +0000
++++ llvm-float-range/tools/clang/lib/Sema/SemaDeclAttr.cpp	2015-01-05 11:58:49.000000000 +0000
+@@ -32,6 +32,8 @@
+ using namespace clang;
+ using namespace sema;
+ 
++#include <iostream> //TODO debug
++
+ /// These constants match the enumerated choices of
+ /// warn_attribute_wrong_decl_type and err_attribute_wrong_decl_type.
+ enum AttributeDeclKind {
+@@ -540,6 +542,40 @@
+   ThreadExpectedClassOrStruct
+ };
+ 
++static void handleFPRangeAttr(Sema &S, Decl *D, const AttributeList &Attr) {
++
++    Expr *MinExpr = Attr.getArgAsExpr(0);
++    Expr *MaxExpr = Attr.getArgAsExpr(1);
++
++    llvm::APSInt MinRange(64);
++    llvm::APSInt MaxRange(64);
++
++    bool fail = false;
++
++    if (MinExpr->isTypeDependent() || MinExpr->isValueDependent() ||
++        !MinExpr->isIntegerConstantExpr(MinRange, S.Context)) {
++        S.Diag(Attr.getLoc(), diag::err_attribute_argument_n_type)
++            << Attr.getName() << 1 << AANT_ArgumentIntegerConstant
++            << MinExpr->getSourceRange();
++        fail = true;
++    }
++
++    if (MaxExpr->isTypeDependent() || MaxExpr->isValueDependent() ||
++        !MaxExpr->isIntegerConstantExpr(MaxRange, S.Context)) {
++        S.Diag(Attr.getLoc(), diag::err_attribute_argument_n_type)
++            << Attr.getName() << 2 << AANT_ArgumentIntegerConstant
++            << MaxExpr->getSourceRange();
++        fail = true;
++    }
++    if(fail)
++        return;
++
++    D->addAttr(::new (S.Context)
++               FPRangeAttr(Attr.getRange(), S.Context,
++                           MinRange.getSExtValue(), MaxRange.getSExtValue(),
++                           Attr.getAttributeSpellingListIndex()));
++}
++
+ static bool checkGuardedVarAttrCommon(Sema &S, Decl *D,
+                                       const AttributeList &Attr) {
+   // D must be either a member field or global (potentially shared) variable.
+@@ -4921,7 +4957,9 @@
+   case AttributeList::AT_TestTypestate:
+     handleTestTypestateAttr(S, D, Attr);
+     break;
+-
++  case AttributeList::AT_FPRange:
++    handleFPRangeAttr(S, D, Attr);
++    break;
+   // Type safety attributes.
+   case AttributeList::AT_ArgumentWithTypeTag:
+     handleArgumentWithTypeTagAttr(S, D, Attr);
+diff -Naur clang-3.4/test/FPRangeAttr/attribute.c llvm-float-range/tools/clang/test/FPRangeAttr/attribute.c
+--- clang-3.4/test/FPRangeAttr/attribute.c	1970-01-01 00:00:00.000000000 +0000
++++ llvm-float-range/tools/clang/test/FPRangeAttr/attribute.c	2015-01-05 11:58:53.000000000 +0000
+@@ -0,0 +1,5 @@
++// RUN: %clang_cc1 -verify -Wall %s
++
++void test1(void) {
++    float prova __attribute__((fprange(10, 20)));
++}
