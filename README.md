@@ -1,24 +1,23 @@
-CTO -- Code Transformation and Optimization Project (A.Y. 2013/2014)
-====================================================================
+Code Transformation and Optimization Project (A.Y. 2013/2014)
+=============================================================
 
 This directory contains the project developed for the CTO course at Politecnico
 di Milano, A.Y. 2013/2014.
 
 Aim of the project is to develop a set of LLVM passes that, starting from a
-specification of the ranges of the local - floating point - variables, are able
-to convert the code to fixed point with a predictable loss of precision.
+specification of the ranges of the local - floating point - variables,
+convert the code to fixed point with a predictable loss of precision.
+
+Some notes about the structure and functionalities of the project are in the
+`doc` folder.
 
 Quick Start
 -----------
 
-The project is a set of analysis and transformation passes for the LLVM
-compiler.
 To create IR with the metadata used within the project, it is necessary to
 compile a modified version of `clang` as per the following instructions.
 
-The project was developed and tested with LLVM 3.4 under Linux (in particular,
-it is known to work with CentOS\RHEL 6 using clang 3.4 compiled from sources
-using the stock gcc 4.4.6 from the repositories).
+The project was developed and tested with LLVM 3.4 under Linux.
 
 In the following, we assume that
 * `LLVM_SRC` is the directory where the llvm source code is located
@@ -70,12 +69,5 @@ process require quite an high amount of memory.
 The LLVM build system should automatically compile llvm and clang in release
 mode (`$LLVM_BUILD/Release+Asserts/{bin,lib}`), and the float-range project in
 debug mode (`$LLVM_BUILD/projects/float-range/Debug+Asserts/lib`). The build
-moden is chosen based on the directory being a repository checkout or not
-(i.e., checks for `.git` or `.svn` directories).
-
-Structure
----------
-
-Some notes about the structure and functionalities of the project are in the
-`doc` folder.
-
+mode is chosen based on the directory being a repository checkout or not
+(it checks for `.git` or `.svn` directories).
